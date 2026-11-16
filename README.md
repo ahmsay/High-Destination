@@ -33,6 +33,44 @@ downloads ~17 GB of weights from Hugging Face, then caches them in the S3
 bucket. Later cold starts copy from S3 (a few minutes). Images land in
 `./wallpapers/`.
 
+### Architecture (as built)
+
+```mermaid
+flowchart TB
+    CLI["<b>hd CLI</b> (your machine)<br/>reads names from CloudFormation outputs<br/>saves images to ./wallpapers/"]
+
+    subgraph AWS["AWS: HighDestination stack"]
+        direction TB
+        SQS[["SQS queue: jobs<br/>+ dead-letter queue"]]
+        ASG["Auto Scaling group<br/>min 0 · max 1 · Spot only<br/>g6.xlarge · g6.2xlarge · g5.xlarge"]
+        S3[("S3 bucket<br/>models/ · outputs/ · logs/")]
+        SSM[("SSM Parameter Store<br/>HF token (optional)")]
+
+        subgraph VPC["VPC: public subnets · no NAT · no inbound ports · S3 gateway endpoint"]
+            subgraph EC2["GPU Spot instance · Deep Learning AMI"]
+                Boot["bootstrap.sh<br/>install ComfyUI, sync weights"]
+                Worker["worker.py<br/>job loop, resize + crop"]
+                Comfy["ComfyUI :8188<br/>FLUX.1 dev fp8 → 4x-UltraSharp"]
+                Boot --> Worker
+                Worker <--> Comfy
+            end
+        end
+    end
+
+    HF[("Hugging Face<br/>first boot only")]
+
+    CLI -- "① send job" --> SQS
+    CLI -- "② set desired capacity 1" --> ASG
+    ASG -- "③ launch" --> EC2
+    Worker -- "④ receive job" --> SQS
+    Worker -- "⑤ PNG + status JSON" --> S3
+    CLI -- "⑥ poll + download" --> S3
+    Boot -- "weights, log on exit" --> S3
+    Boot -.-> SSM
+    Boot -. "missing weights" .-> HF
+    Worker -. "idle 10 min: terminate itself" .-> ASG
+```
+
 ### How it runs
 
 - `hd gen` puts a job on SQS and sets the Auto Scaling group to 1 (Spot only:
