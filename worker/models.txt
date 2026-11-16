@@ -1,0 +1,6 @@
+# <path under ComfyUI/models>  <download URL>
+# Downloaded once on the first boot, then cached in s3://<bucket>/models/.
+# If a URL needs a Hugging Face token (gated model), store it with:
+#   aws ssm put-parameter --name /high-destination/hf-token --type SecureString --value hf_xxx
+checkpoints/flux1-dev-fp8.safetensors  https://huggingface.co/Comfy-Org/flux1-dev/resolve/main/flux1-dev-fp8.safetensors
+upscale_models/4x-UltraSharp.pth       https://huggingface.co/Kim2091/UltraSharp/resolve/main/4x-UltraSharp.pth

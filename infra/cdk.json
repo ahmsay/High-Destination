@@ -1,0 +1,8 @@
+{
+  "app": "python3 app.py",
+  "context": {
+    "instanceTypes": ["g6.xlarge", "g6.2xlarge", "g5.xlarge"],
+    "idleMinutes": 10,
+    "comfyuiVersion": "v0.45.4"
+  }
+}
