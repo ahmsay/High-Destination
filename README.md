@@ -1,5 +1,8 @@
 # High Destination
 
+*High (not mid) Destination (not journey): life is about the journey, but an
+image is about the result.*
+
 A personal, self-hosted image generator (mainly wallpapers) on AWS — a cheap,
 fully customizable alternative to Midjourney for a few images per month.
 Generation speed is not a concern; cost and control are.
