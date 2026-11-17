@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import re
 import sys
@@ -26,12 +27,18 @@ DEFAULT_OUT = Path("wallpapers")
 
 
 class Stack:
-    def __init__(self, name: str):
-        self.session = boto3.Session()
+    def __init__(self, name: str, region: str | None = None):
+        # boto3 ignores AWS_REGION on some versions (it reads AWS_DEFAULT_REGION);
+        # honor it so hd uses the same region as the AWS CLI and CDK.
+        region = region or os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+        self.session = boto3.Session(region_name=region)
         try:
             stack = self.session.client("cloudformation").describe_stacks(StackName=name)["Stacks"][0]
         except ClientError as e:
-            sys.exit(f"Cannot read stack {name!r} ({e.response['Error']['Message']}). Deployed? Right region?")
+            sys.exit(
+                f"Cannot read stack {name!r} in region {self.session.region_name!r} "
+                f"({e.response['Error']['Message']}). Deployed? Set AWS_REGION or pass --region."
+            )
         outputs = {o["OutputKey"]: o["OutputValue"] for o in stack.get("Outputs", [])}
         self.bucket = outputs["BucketName"]
         self.queue_url = outputs["QueueUrl"]
@@ -190,6 +197,7 @@ def cmd_presets(args) -> int:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="hd", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--stack", default=DEFAULT_STACK, help="CloudFormation stack name")
+    p.add_argument("--region", help="AWS region of the stack (default: AWS_REGION, then your profile)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     g = sub.add_parser("gen", help="generate wallpaper(s)")
@@ -219,7 +227,7 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
     if args.cmd == "presets":
         return cmd_presets(args)
-    stack = Stack(args.stack)
+    stack = Stack(args.stack, args.region)
     return {"gen": cmd_gen, "fetch": cmd_fetch, "status": cmd_status, "stop": cmd_stop, "logs": cmd_logs}[args.cmd](
         args, stack
     )
