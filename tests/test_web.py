@@ -142,11 +142,52 @@ def test_history_pages_and_includes_legacy(client, stack):
 
 def test_delete(client, stack):
     job_id = client.post("/api/jobs", json={"prompt": "bye"}).json()["jobs"][0]["job_id"]
-    assert client.delete(f"/api/jobs/{job_id}").status_code == 409  # still queued
     finish(stack, job_id)
     assert client.delete(f"/api/jobs/{job_id}").status_code == 204
     assert client.get(f"/api/jobs/{job_id}").status_code == 404
     assert "Contents" not in stack.s3.list_objects_v2(Bucket=BUCKET, Prefix="outputs/")
+
+
+def test_cancel_queued_but_not_running(client, stack):
+    job_id = client.post("/api/jobs", json={"prompt": "nah"}).json()["jobs"][0]["job_id"]
+    assert client.delete(f"/api/jobs/{job_id}").status_code == 204  # queued -> cancelled
+    assert client.get("/api/jobs").json()["jobs"] == []
+    job_id = client.post("/api/jobs", json={"prompt": "busy"}).json()["jobs"][0]["job_id"]
+    key = f"outputs/local/{job_id}.json"
+    st = json.loads(stack.s3.get_object(Bucket=BUCKET, Key=key)["Body"].read())
+    stack.s3.put_object(Bucket=BUCKET, Key=key, Body=json.dumps({**st, "state": "running"}))
+    assert client.delete(f"/api/jobs/{job_id}").status_code == 409
+
+
+def test_deleting_old_worker_result_does_not_leave_a_ghost(client, stack):
+    """Regression: an old worker wrote outputs/<id>.*, delete removed only those, and the
+    API's own outputs/local/<id>.json "queued" record came back as a job stuck in the queue."""
+    ids = [j["job_id"] for j in client.post("/api/jobs", json={"prompt": "x", "count": 2}).json()["jobs"]]
+    for job_id in ids:
+        finish(stack, job_id, prefix="outputs/", thumb=False)
+    listed = client.get("/api/jobs").json()["jobs"]
+    assert {j["state"] for j in listed} == {"done"}  # history prefers the finished result
+    assert client.delete(f"/api/jobs/{ids[0]}").status_code == 204
+    assert [j["job_id"] for j in client.get("/api/jobs").json()["jobs"]] == [ids[1]]
+    assert client.get(f"/api/jobs/{ids[0]}").status_code == 404
+
+
+def test_worker_skips_cancelled_jobs(stack, monkeypatch):
+    pytest.importorskip("PIL")
+    monkeypatch.setenv("HD_BUCKET", BUCKET)
+    monkeypatch.setenv("HD_QUEUE_URL", stack.queue_url)
+    monkeypatch.setenv("HD_COMFY_DIR", "/nonexistent")
+    monkeypatch.syspath_prepend(str(ROOT / "worker"))
+    import importlib
+    worker = importlib.import_module("worker")
+    worker = importlib.reload(worker)  # bind its clients to this test's moto
+    assert worker.status_exists("outputs/local/", "nope") is False
+    stack.s3.put_object(Bucket=BUCKET, Key="outputs/local/yes.json", Body=b"{}")
+    assert worker.status_exists("outputs/local/", "yes") is True
+    assert worker.prefix_for({"user": "local"}) == "outputs/local/"
+    assert worker.prefix_for({}) == "outputs/"
+    with pytest.raises(ValueError):
+        worker.prefix_for({"user": "../etc"})
 
 
 def test_bad_ids_are_404(client):

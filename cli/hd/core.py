@@ -156,30 +156,35 @@ class Stack:
     def history(self, user: str, limit: int = 30, before: str | None = None,
                 include_legacy: bool = False) -> tuple[list[dict], str | None]:
         """Newest-first page of a user's jobs. Returns (jobs, cursor for the next page)."""
-        found: dict[str, str] = {}
+        legacy: set[str] = set()
         if include_legacy:
-            for key in self._list_json(LEGACY_PREFIX, delimiter="/"):
-                found[key[len(LEGACY_PREFIX):-5]] = LEGACY_PREFIX
+            legacy = {k[len(LEGACY_PREFIX):-5] for k in self._list_json(LEGACY_PREFIX, delimiter="/")}
         prefix = user_prefix(user)
-        for key in self._list_json(prefix):
-            found[key[len(prefix):-5]] = prefix  # the per-user copy wins
-        ids = sorted((j for j in found if before is None or j < before), reverse=True)
+        mine = {k[len(prefix):-5] for k in self._list_json(prefix)}
+        ids = sorted((j for j in mine | legacy if before is None or j < before), reverse=True)
         page, more = ids[:limit], len(ids) > limit
 
         def load(job_id: str) -> dict | None:
-            st = self._get_json(f"{found[job_id]}{job_id}.json")
-            if st is not None:
-                st["_prefix"] = found[job_id]
-            return st
+            # Same rules as job_status: a result from an old worker beats our own "queued" record.
+            if job_id not in mine:
+                st = self._get_json(f"{LEGACY_PREFIX}{job_id}.json")
+                if st is not None:
+                    st["_prefix"] = LEGACY_PREFIX
+                return st
+            return self.job_status(user, job_id, include_legacy=job_id in legacy)
 
         with ThreadPoolExecutor(max_workers=8) as pool:
             jobs = [j for j in pool.map(load, page) if j is not None]
         return jobs, (page[-1] if more and page else None)
 
-    def delete(self, status: dict) -> None:
-        base = f"{status['_prefix']}{status['job_id']}"
-        self.s3.delete_objects(Bucket=self.bucket, Delete={
-            "Objects": [{"Key": base + ext} for ext in (".json", ".png", ".thumb.jpg")], "Quiet": True})
+    def delete(self, user: str, job_id: str, include_legacy: bool = False) -> None:
+        """Remove every file of a job, in the user's folder and (for admins) the pre-v0.2 location.
+
+        Deleting a queued job cancels it: a v0.2+ worker skips jobs whose record is gone.
+        """
+        prefixes = [user_prefix(user)] + ([LEGACY_PREFIX] if include_legacy else [])
+        self.s3.delete_objects(Bucket=self.bucket, Delete={"Quiet": True, "Objects": [
+            {"Key": f"{p}{job_id}{ext}"} for p in prefixes for ext in (".json", ".png", ".thumb.jpg")]})
 
     def image_key(self, status: dict, thumb: bool = False) -> str:
         ext = ".thumb.jpg" if thumb and status.get("thumb") else ".png"

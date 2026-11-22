@@ -22,6 +22,7 @@ import urllib.request
 from pathlib import Path
 
 import boto3
+from botocore.exceptions import ClientError
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -83,6 +84,16 @@ def put_status(prefix: str, job_id: str, **fields) -> None:
     s3.put_object(
         Bucket=BUCKET, Key=f"{prefix}{job_id}.json", Body=json.dumps(body, indent=2), ContentType="application/json"
     )
+
+
+def status_exists(prefix: str, job_id: str) -> bool:
+    try:
+        s3.head_object(Bucket=BUCKET, Key=f"{prefix}{job_id}.json")
+        return True
+    except ClientError as e:
+        if e.response["Error"]["Code"] in ("404", "NoSuchKey", "NotFound"):
+            return False
+        raise
 
 
 def run_job(job: dict, prefix: str) -> dict:
@@ -157,8 +168,14 @@ def main() -> None:
             if not SAFE_NAME.fullmatch(str(job_id)):
                 raise ValueError("bad job id")
             prefix = prefix_for(job)
+            cancelled = job.get("user") is not None and not status_exists(prefix, job_id)
         except Exception:
             log(f"dropping malformed message: {msg['Body'][:200]}")
+            sqs.delete_message(QueueUrl=QUEUE_URL, ReceiptHandle=msg["ReceiptHandle"])
+            continue
+        if cancelled:
+            # The web app/CLI records every job as "queued" before sending it; no record means it was cancelled.
+            log(f"{job_id}: cancelled, skipping")
             sqs.delete_message(QueueUrl=QUEUE_URL, ReceiptHandle=msg["ReceiptHandle"])
             continue
 

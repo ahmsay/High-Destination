@@ -231,6 +231,9 @@ function pendingText(job) {
   if (job.state === "running") return "Generating…";
   const w = state.worker;
   if (!w) return "Queued";
+  // SQS counts lag a little, so only trust "empty queue" for jobs older than a minute.
+  const inQueue = w.queue ? w.queue.waiting + w.queue.in_progress : null;
+  if (inQueue === 0 && Date.now() - jobTime(job.job_id) > 60000) return "Not in the queue any more — cancel it?";
   if (!w.instance) return w.desired > 0 ? "Requesting a GPU…" : "Waiting for a worker";
   if (w.instance.state.startsWith("Pending")) return "Worker booting…";
   if (w.instance.state === "InService") return "Queued · worker warming up or busy";
@@ -285,6 +288,11 @@ function updateCard(el, job) {
     acts.append(del);
     return;
   }
+  if (job.state === "queued") {
+    const cancel = Object.assign(document.createElement("button"), { textContent: "Cancel", title: "Cancel this job", type: "button" });
+    cancel.onclick = () => deleteJob(job.job_id, "Cancel this job? It will not be generated.");
+    acts.append(cancel);
+  }
   status.innerHTML = `<b></b><span class="elapsed"></span><span class="px"></span>`;
   status.querySelector("b").textContent = pendingText(job);
   status.querySelector(".elapsed").textContent = ago(Date.now() - jobTime(job.job_id));
@@ -319,8 +327,8 @@ async function loadHistory(more = false) {
   }
 }
 
-async function deleteJob(id) {
-  if (!confirm("Delete this image from S3? This cannot be undone.")) return false;
+async function deleteJob(id, question = "Delete this image from S3? This cannot be undone.") {
+  if (!confirm(question)) return false;
   try {
     await api(`/jobs/${id}`, { method: "DELETE" });
     state.jobs.delete(id);

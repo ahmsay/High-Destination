@@ -127,9 +127,9 @@ def create_app(stack: core.Stack, auth_mode: str = "none") -> FastAPI:
     @app.delete("/api/jobs/{job_id}", status_code=204)
     def delete_job(job_id: str, user: User = Depends(current_user)):
         st = find(user, job_id)
-        if st.get("state") in ("queued", "running"):
-            raise HTTPException(409, "the job has not finished yet")
-        stack.delete(st)
+        if st.get("state") == "running":
+            raise HTTPException(409, "the job is being generated right now; try again when it finishes")
+        stack.delete(user.name, job_id, include_legacy=user.is_admin)  # on a queued job this cancels it
 
     @app.get("/api/worker")
     def worker(_: User = Depends(admin)):
