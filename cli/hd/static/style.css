@@ -60,7 +60,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 650; font-size: 17px; letter-spacing: .2px; }
 .brand svg { color: var(--accent); }
-.worker { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.worker { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); margin-left: auto; }
+.fatal { padding: 24px; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
 .dot.ok { background: var(--ok); }
 .dot.busy { background: var(--warn); animation: pulse 1.4s ease-in-out infinite; }

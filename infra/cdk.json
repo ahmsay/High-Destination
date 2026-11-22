@@ -3,6 +3,8 @@
   "context": {
     "instanceTypes": ["g6.xlarge", "g6.2xlarge", "g5.xlarge"],
     "idleMinutes": 10,
-    "comfyuiVersion": "v0.45.4"
+    "comfyuiVersion": "v0.45.4",
+    "web": true,
+    "webDomain": "highdestination.ahmetsay.com"
   }
 }

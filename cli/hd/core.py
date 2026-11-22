@@ -11,6 +11,7 @@ process and in a Lambda function.
 from __future__ import annotations
 
 import json
+import os
 import random
 import re
 import time
@@ -81,9 +82,18 @@ class Stack:
                 f"Cannot read stack {name!r} ({e.response['Error']['Message']}). Deployed? Right region?"
             ) from e
         outputs = {o["OutputKey"]: o["OutputValue"] for o in stack.get("Outputs", [])}
-        self.bucket = outputs["BucketName"]
-        self.queue_url = outputs["QueueUrl"]
-        self.asg = outputs["AsgName"]
+        self._connect(outputs["BucketName"], outputs["QueueUrl"], outputs["AsgName"])
+
+    @classmethod
+    def from_env(cls) -> "Stack":
+        """Names from HD_BUCKET / HD_QUEUE_URL / HD_ASG (set on the web Lambda), no CloudFormation call."""
+        s = cls.__new__(cls)
+        s.session = boto3.Session()
+        s._connect(os.environ["HD_BUCKET"], os.environ["HD_QUEUE_URL"], os.environ["HD_ASG"])
+        return s
+
+    def _connect(self, bucket: str, queue_url: str, asg: str) -> None:
+        self.bucket, self.queue_url, self.asg = bucket, queue_url, asg
         # SigV4 + the regional endpoint, so presigned URLs work in any region.
         self.s3 = self.session.client(
             "s3", config=Config(signature_version="s3v4", s3={"addressing_style": "virtual"})

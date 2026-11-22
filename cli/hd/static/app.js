@@ -25,8 +25,9 @@ const state = {
 async function api(path, opts = {}) {
   const res = await fetch(API + path, {
     ...opts,
-    headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+    headers: { "Content-Type": "application/json", ...(await HDAuth.header()), ...(opts.headers || {}) },
   });
+  if (res.status === 401 && HDAuth.enabled) return HDAuth.expired(); // signed out elsewhere, or revoked
   if (res.status === 204) return null;
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -548,11 +549,15 @@ function wire() {
 
 async function init() {
   try {
+    await HDAuth.ready();
     [state.me, state.config] = await Promise.all([api("/me"), api("/presets")]);
   } catch (ex) {
-    document.body.innerHTML = `<p style="padding:24px">Cannot reach the API: ${ex.message}</p>`;
+    const p = Object.assign(document.createElement("p"), { className: "fatal", textContent: `Cannot reach the API: ${ex.message}` });
+    document.body.replaceChildren(p);
     return;
   }
+  $("logout-btn").hidden = !HDAuth.enabled;
+  $("logout-btn").onclick = () => HDAuth.logout();
   $("preset").replaceChildren(...state.config.presets.map((p) => {
     const o = document.createElement("option");
     o.value = p.name;

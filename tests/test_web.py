@@ -226,3 +226,96 @@ def test_user_names_are_validated():
         core.user_prefix("../x")
     with pytest.raises(ValueError):
         core.build_jobs(user="a/b", prompt="x", width=64, height=64)
+
+
+# ---- cloud mode: Cognito claims from API Gateway, through Mangum like on Lambda ----
+CLIENT_ID = "client123"
+OWNER = {"sub": "11111111-aaaa", "token_use": "access", "client_id": CLIENT_ID, "username": "me",
+         "cognito:groups": "[admin]"}  # HTTP API's JWT authorizer flattens lists to "[a b]"
+
+
+def http_api_event(method, path, claims=None, body=None):
+    ctx = {"http": {"method": method, "path": path, "sourceIp": "1.2.3.4", "protocol": "HTTP/1.1"},
+           "stage": "$default", "requestId": "r", "routeKey": "ANY /api/{proxy+}"}
+    if claims is not None:
+        ctx["authorizer"] = {"jwt": {"claims": claims, "scopes": None}}
+    return {"version": "2.0", "routeKey": "ANY /api/{proxy+}", "rawPath": path, "rawQueryString": "",
+            "headers": {"host": "x.execute-api.eu-west-1.amazonaws.com", "content-type": "application/json"},
+            "requestContext": ctx, "isBase64Encoded": False, **({"body": json.dumps(body)} if body else {})}
+
+
+@pytest.fixture
+def lam(stack):
+    mangum = pytest.importorskip("mangum")
+    handler = mangum.Mangum(web.create_app(stack, auth_mode="cognito", client_id=CLIENT_ID), lifespan="off")
+
+    def call(method, path, claims=None, body=None):
+        r = handler(http_api_event(method, path, claims, body), {})
+        return r["statusCode"], (json.loads(r["body"]) if r.get("body") else None)
+
+    return call
+
+
+def test_cognito_owner_is_admin_and_shares_the_cli_folder(lam, stack):
+    assert lam("GET", "/api/me", OWNER) == (200, {"name": "local", "is_admin": True})
+    code, body = lam("POST", "/api/jobs", OWNER, {"prompt": "fjord"})
+    assert code == 201 and stack.autoscaling.desired == 1
+    assert stack.s3.list_objects_v2(Bucket=BUCKET, Prefix="outputs/local/")["KeyCount"] == 1
+    assert lam("GET", "/api/worker", OWNER)[0] == 200
+
+
+def test_cognito_other_user_gets_own_folder_and_no_worker_controls(lam, stack):
+    guest = {**OWNER, "sub": "22222222-bbbb", "cognito:groups": None}
+    assert lam("GET", "/api/me", guest) == (200, {"name": "22222222-bbbb", "is_admin": False})
+    assert lam("POST", "/api/jobs", guest, {"prompt": "x"})[0] == 201
+    assert stack.s3.list_objects_v2(Bucket=BUCKET, Prefix="outputs/22222222-bbbb/")["KeyCount"] == 1
+    assert lam("GET", "/api/jobs", OWNER)[1]["jobs"] == []  # the owner does not see guests' jobs either
+    assert lam("GET", "/api/worker", guest)[0] == 403
+    assert lam("POST", "/api/worker/stop", guest)[0] == 403
+
+
+@pytest.mark.parametrize("claims", [
+    None,  # no authorizer context (should never pass API Gateway, but the app checks anyway)
+    {},
+    {**OWNER, "token_use": "id"},
+    {**OWNER, "client_id": "someone-else"},
+    {**OWNER, "sub": ""},
+])
+def test_cognito_rejects_missing_or_wrong_tokens(lam, stack, claims):
+    assert lam("GET", "/api/me", claims)[0] == 401
+    assert lam("POST", "/api/jobs", claims, {"prompt": "x"})[0] == 401
+    assert stack.autoscaling.desired == 0
+
+
+@pytest.mark.parametrize("raw,expected", [
+    (["admin", "x"], {"admin", "x"}), ("[admin x]", {"admin", "x"}), ("[]", set()), (None, set()),
+])
+def test_groups_claim_formats(raw, expected):
+    from hd.auth import groups_of
+    assert groups_of({"cognito:groups": raw}) == expected
+
+
+def test_local_config_js_means_no_login(client):
+    r = client.get("/config.js")
+    assert r.status_code == 200 and "HD_AUTH = null" in r.text
+    assert 'src="config.js"' in client.get("/").text
+
+
+def test_stack_from_env(monkeypatch):
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "eu-west-1")
+    monkeypatch.setenv("HD_BUCKET", "b")
+    monkeypatch.setenv("HD_QUEUE_URL", "https://sqs/q")
+    monkeypatch.setenv("HD_ASG", "a")
+    s = core.Stack.from_env()
+    assert (s.bucket, s.queue_url, s.asg) == ("b", "https://sqs/q", "a")
+
+
+def test_lambda_entry_point_imports(stack, monkeypatch):
+    pytest.importorskip("mangum")
+    monkeypatch.setenv("HD_BUCKET", BUCKET)
+    monkeypatch.setenv("HD_QUEUE_URL", stack.queue_url)
+    monkeypatch.setenv("HD_ASG", "asg")
+    monkeypatch.setenv("HD_CLIENT_ID", CLIENT_ID)
+    import importlib
+    mod = importlib.import_module("hd.lambda_handler")
+    assert callable(mod.handler)
