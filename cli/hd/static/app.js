@@ -342,8 +342,20 @@ function openLightbox(id) {
   const ids = doneIds();
   state.lbIndex = ids.indexOf(id);
   if (state.lbIndex < 0) return;
+  // Details panel: remembered on wide screens, hidden by default on phones so the image gets the whole screen.
+  const saved = store("lbInfo");
+  setLbInfo(saved ?? !matchMedia("(max-width: 860px)").matches);
   showLightbox();
   if (!$("lightbox").open) $("lightbox").showModal();
+}
+
+function setLbInfo(show) {
+  $("lightbox").classList.toggle("no-info", !show);
+}
+function toggleLbInfo() {
+  const show = $("lightbox").classList.contains("no-info");
+  setLbInfo(show);
+  if (!matchMedia("(max-width: 860px)").matches) store("lbInfo", show);
 }
 
 function showLightbox() {
@@ -479,10 +491,15 @@ function wire() {
   $("lb-close").onclick = () => $("lightbox").close();
   $("lb-prev").onclick = () => stepLightbox(-1);
   $("lb-next").onclick = () => stepLightbox(1);
-  $("lightbox").addEventListener("click", (e) => { if (e.target.id === "lightbox" || e.target.classList.contains("lb-img")) $("lightbox").close(); });
+  $("lb-info").onclick = toggleLbInfo;
+  // Click the image (or the empty space around it) to show/hide details, like a photo viewer.
+  $("lightbox").addEventListener("click", (e) => {
+    if (e.target.id === "lb-img" || e.target.classList.contains("lb-img")) toggleLbInfo();
+  });
   $("lightbox").addEventListener("keydown", (e) => {
     if (e.key === "ArrowLeft") stepLightbox(-1);
     if (e.key === "ArrowRight") stepLightbox(1);
+    if (e.key === "i") toggleLbInfo();
   });
   $("lb-reuse").onclick = () => { fillFrom(lbJob()); $("lightbox").close(); toast("Settings copied to the form."); };
   $("lb-variation").onclick = () => { fillFrom(lbJob(), { withSeed: false }); $("lightbox").close(); generate(); };
