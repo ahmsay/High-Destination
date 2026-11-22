@@ -3,93 +3,53 @@
   hd gen "misty fjord at dawn, cinematic" --preset ultrawide
   hd gen "neon city in rain" --ratio 9:16 --count 4
   hd gen "desert dunes" --size 3440x1440 --seed 42
+  hd serve                      # web UI on http://127.0.0.1:8000
   hd status | hd fetch <job_id> | hd stop | hd logs | hd presets
 """
 from __future__ import annotations
 
 import argparse
-import json
-import random
-import re
 import sys
 import time
-import uuid
 from pathlib import Path
 
-import boto3
-from botocore.exceptions import ClientError
+from . import core, sizes
 
-from . import sizes
-
-DEFAULT_STACK = "HighDestination"
 DEFAULT_OUT = Path("wallpapers")
+USER = core.LOCAL_USER
 
 
-class Stack:
-    def __init__(self, name: str):
-        self.session = boto3.Session()
-        try:
-            stack = self.session.client("cloudformation").describe_stacks(StackName=name)["Stacks"][0]
-        except ClientError as e:
-            sys.exit(f"Cannot read stack {name!r} ({e.response['Error']['Message']}). Deployed? Right region?")
-        outputs = {o["OutputKey"]: o["OutputValue"] for o in stack.get("Outputs", [])}
-        self.bucket = outputs["BucketName"]
-        self.queue_url = outputs["QueueUrl"]
-        self.asg = outputs["AsgName"]
-        self.s3 = self.session.client("s3")
-        self.sqs = self.session.client("sqs")
-        self.autoscaling = self.session.client("autoscaling")
-
-    def group(self) -> dict:
-        return self.autoscaling.describe_auto_scaling_groups(AutoScalingGroupNames=[self.asg])["AutoScalingGroups"][0]
-
-    def wake(self) -> bool:
-        if self.group()["DesiredCapacity"] < 1:
-            self.autoscaling.set_desired_capacity(AutoScalingGroupName=self.asg, DesiredCapacity=1)
-            return True
-        return False
-
-    def job_status(self, job_id: str) -> dict | None:
-        try:
-            body = self.s3.get_object(Bucket=self.bucket, Key=f"outputs/{job_id}.json")["Body"].read()
-        except ClientError as e:
-            if e.response["Error"]["Code"] in ("NoSuchKey", "404"):
-                return None
-            raise
-        return json.loads(body)
-
-    def download(self, job_id: str, dest: Path) -> Path:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        self.s3.download_file(self.bucket, f"outputs/{job_id}.png", str(dest))
-        return dest
+def open_stack(name: str) -> core.Stack:
+    try:
+        return core.Stack(name)
+    except core.StackError as e:
+        sys.exit(str(e))
 
 
-def slug(text: str, n: int = 40) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:n].strip("-") or "wallpaper"
-
-
-def worker_state(stack: Stack) -> str:
-    instances = stack.group()["Instances"]
-    if not instances:
+def worker_state(stack: core.Stack) -> str:
+    inst = stack.worker()["instance"]
+    if not inst:
         return "no worker running"
-    i = instances[0]
-    return f"worker {i['InstanceId']} ({i.get('InstanceType', '?')}) {i['LifecycleState']}"
+    return f"worker {inst['id']} ({inst['type']}) {inst['state']}"
 
 
-def wait(stack: Stack, jobs: dict[str, Path], timeout_min: float) -> int:
+def wait(stack: core.Stack, jobs: dict[str, Path], timeout_min: float) -> int:
     pending = dict(jobs)
     deadline = time.time() + timeout_min * 60
     last_line = ""
     failures = 0
     start = time.time()
     while pending and time.time() < deadline:
+        states = []
         for job_id, dest in list(pending.items()):
-            st = stack.job_status(job_id)
-            if not st or st["state"] == "running":
+            st = stack.job_status(USER, job_id, include_legacy=True)
+            state = (st or {}).get("state", "queued")
+            if state in ("queued", "running"):
+                states.append(state)
                 continue
             del pending[job_id]
-            if st["state"] == "done":
-                stack.download(job_id, dest)
+            if state == "done":
+                stack.download(st, dest)
                 extra = " (ratio wider than 2.5:1 was cropped)" if st.get("ratio_clamped") else ""
                 print(f"\n✔ {dest}  {st['size'][0]}x{st['size'][1]}  seed {st['request']['seed']}"
                       f"  {st.get('seconds')}s{extra}")
@@ -97,7 +57,6 @@ def wait(stack: Stack, jobs: dict[str, Path], timeout_min: float) -> int:
                 failures += 1
                 print(f"\n✘ {job_id}: {st.get('error')}")
         if pending:
-            states = [(stack.job_status(j) or {}).get("state", "queued") for j in pending]
             line = (f"  {int(time.time() - start)}s  {len(pending)} left "
                     f"[{', '.join(sorted(set(states)))}]  {worker_state(stack)}")
             if line != last_line:
@@ -113,71 +72,58 @@ def wait(stack: Stack, jobs: dict[str, Path], timeout_min: float) -> int:
     return 1 if failures else 0
 
 
-def cmd_gen(args, stack: Stack) -> int:
+def cmd_gen(args, stack: core.Stack) -> int:
     try:
         width, height = sizes.resolve(args.preset, args.ratio, args.size)
     except ValueError as e:
         sys.exit(str(e))
-    jobs: dict[str, Path] = {}
-    for i in range(args.count):
-        job_id = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
-        seed = args.seed + i if args.seed is not None else random.randrange(2**32)
-        job = {"job_id": job_id, "prompt": args.prompt, "width": width, "height": height,
-               "seed": seed, "steps": args.steps, "guidance": args.guidance}
-        stack.sqs.send_message(QueueUrl=stack.queue_url, MessageBody=json.dumps(job))
-        jobs[job_id] = args.out / f"{slug(args.prompt)}-{width}x{height}-{seed}.png"
-        print(f"queued {job_id}  {width}x{height}  seed {seed}")
-    if stack.wake():
+    jobs = core.build_jobs(user=USER, prompt=args.prompt, width=width, height=height, count=args.count,
+                           seed=args.seed, steps=args.steps, guidance=args.guidance)
+    started = stack.submit(jobs)
+    for job in jobs:
+        print(f"queued {job['job_id']}  {width}x{height}  seed {job['seed']}")
+    if started:
         print("starting a GPU worker (cold start is a few minutes)")
     if args.no_wait:
         return 0
-    return wait(stack, jobs, args.timeout)
+    return wait(stack, {j["job_id"]: args.out / core.filename_for(j) for j in jobs}, args.timeout)
 
 
-def cmd_fetch(args, stack: Stack) -> int:
-    st = stack.job_status(args.job_id)
-    if not st:
+def cmd_fetch(args, stack: core.Stack) -> int:
+    st = stack.job_status(USER, args.job_id, include_legacy=True)
+    if not st or st["state"] == "queued":
         print("no result yet (still queued)")
         return 1
     if st["state"] != "done":
-        print(json.dumps(st, indent=2))
+        print({k: v for k, v in st.items() if k != "_prefix"})
         return 1
-    req = st["request"]
-    dest = args.out / f"{slug(req['prompt'])}-{req['width']}x{req['height']}-{req['seed']}.png"
-    print(stack.download(args.job_id, dest))
+    dest = args.out / core.filename_for(st["request"])
+    stack.download(st, dest)
+    print(dest)
     return 0
 
 
-def cmd_status(args, stack: Stack) -> int:
-    attrs = stack.sqs.get_queue_attributes(
-        QueueUrl=stack.queue_url,
-        AttributeNames=["ApproximateNumberOfMessages", "ApproximateNumberOfMessagesNotVisible"],
-    )["Attributes"]
-    print(f"queue: {attrs['ApproximateNumberOfMessages']} waiting, "
-          f"{attrs['ApproximateNumberOfMessagesNotVisible']} in progress")
-    g = stack.group()
-    print(f"asg:   desired {g['DesiredCapacity']}, {worker_state(stack)}")
+def cmd_status(args, stack: core.Stack) -> int:
+    q = stack.queue()
+    print(f"queue: {q['waiting']} waiting, {q['in_progress']} in progress")
+    print(f"asg:   desired {stack.worker()['desired']}, {worker_state(stack)}")
     return 0
 
 
-def cmd_stop(args, stack: Stack) -> int:
-    stack.autoscaling.set_desired_capacity(AutoScalingGroupName=stack.asg, DesiredCapacity=0)
+def cmd_stop(args, stack: core.Stack) -> int:
+    stack.stop(purge=args.purge)
     print("desired capacity set to 0; the worker will be terminated")
     if args.purge:
-        stack.sqs.purge_queue(QueueUrl=stack.queue_url)
         print("queue purged")
     return 0
 
 
-def cmd_logs(args, stack: Stack) -> int:
-    objs = stack.s3.list_objects_v2(Bucket=stack.bucket, Prefix="logs/").get("Contents", [])
-    if not objs:
+def cmd_logs(args, stack: core.Stack) -> int:
+    log = stack.latest_log(args.lines)
+    if not log:
         print("no logs yet (uploaded when a worker shuts down; use SSM Session Manager on a live one)")
         return 1
-    latest = max(objs, key=lambda o: o["LastModified"])
-    print(f"== {latest['Key']} ==")
-    text = stack.s3.get_object(Bucket=stack.bucket, Key=latest["Key"])["Body"].read().decode(errors="replace")
-    print("\n".join(text.splitlines()[-args.lines:]))
+    print(f"== {log[0]} ==\n{log[1]}")
     return 0
 
 
@@ -187,9 +133,29 @@ def cmd_presets(args) -> int:
     return 0
 
 
+def cmd_serve(args) -> int:
+    try:
+        import uvicorn
+
+        from . import web
+    except ImportError:
+        sys.exit("The web UI needs extra packages: pip install -e 'cli[web]'")
+    if args.host not in ("127.0.0.1", "localhost", "::1"):
+        print(f"warning: serving on {args.host} with no login; anyone who can reach it can spend your GPU money")
+    app = web.create_app(stack=open_stack(args.stack), auth_mode="none")
+    url = f"http://{'localhost' if args.host in ('127.0.0.1', '::1') else args.host}:{args.port}"
+    print(f"High Destination UI on {url}  (Ctrl+C to stop)")
+    if args.open:
+        import webbrowser
+
+        webbrowser.open(url)
+    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="hd", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--stack", default=DEFAULT_STACK, help="CloudFormation stack name")
+    p.add_argument("--stack", default=core.DEFAULT_STACK, help="CloudFormation stack name")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     g = sub.add_parser("gen", help="generate wallpaper(s)")
@@ -216,10 +182,17 @@ def main(argv: list[str] | None = None) -> int:
     lg.add_argument("--lines", type=int, default=80)
     sub.add_parser("presets", help="list size presets")
 
+    sv = sub.add_parser("serve", help="run the web UI locally")
+    sv.add_argument("--host", default="127.0.0.1", help="bind address (default 127.0.0.1, this machine only)")
+    sv.add_argument("--port", type=int, default=8000)
+    sv.add_argument("--open", action="store_true", help="open it in your browser")
+
     args = p.parse_args(argv)
     if args.cmd == "presets":
         return cmd_presets(args)
-    stack = Stack(args.stack)
+    if args.cmd == "serve":
+        return cmd_serve(args)
+    stack = open_stack(args.stack)
     return {"gen": cmd_gen, "fetch": cmd_fetch, "status": cmd_status, "stop": cmd_stop, "logs": cmd_logs}[args.cmd](
         args, stack
     )

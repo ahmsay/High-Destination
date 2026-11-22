@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>High Destination</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231b1d24'/%3E%3Cpath d='M4 24 L13 12 L19 19 L22 15 L28 24 Z' fill='%23e8a33d'/%3E%3Ccircle cx='23' cy='9' r='3' fill='%23e8a33d'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><path d="M4 24 L13 12 L19 19 L22 15 L28 24 Z" fill="currentColor"/><circle cx="23" cy="9" r="3" fill="currentColor"/></svg>
+      <span>High Destination</span>
+    </div>
+    <div class="worker" id="worker" hidden>
+      <span class="dot" id="worker-dot"></span>
+      <span id="worker-text">checking worker…</span>
+      <button class="ghost small" id="logs-btn" type="button">Logs</button>
+      <button class="ghost small danger" id="stop-btn" type="button" hidden>Stop</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <form class="panel" id="gen-form" autocomplete="off">
+      <label class="field">
+        <span class="label">Prompt</span>
+        <textarea id="prompt" rows="5" maxlength="2000" required
+          placeholder="misty norwegian fjord at dawn, cinematic, volumetric light"></textarea>
+      </label>
+
+      <div class="field">
+        <span class="label">Size</span>
+        <div class="tabs" role="tablist">
+          <button type="button" role="tab" data-mode="preset" class="tab active">Preset</button>
+          <button type="button" role="tab" data-mode="ratio" class="tab">Ratio</button>
+          <button type="button" role="tab" data-mode="size" class="tab">Exact</button>
+        </div>
+        <div class="mode" data-mode="preset">
+          <select id="preset"></select>
+        </div>
+        <div class="mode" data-mode="ratio" hidden>
+          <div class="chips" id="ratio-chips"></div>
+          <input id="ratio" type="text" placeholder="e.g. 16:9" value="16:9">
+        </div>
+        <div class="mode" data-mode="size" hidden>
+          <div class="row">
+            <input id="width" type="number" min="64" max="8192" value="3440" aria-label="Width">
+            <span class="times">×</span>
+            <input id="height" type="number" min="64" max="8192" value="1440" aria-label="Height">
+          </div>
+        </div>
+        <div class="shape">
+          <div class="shape-box"><div id="shape-rect"></div></div>
+          <div class="shape-info"><strong id="shape-px">3840 × 2160</strong><span id="shape-ratio">16:9</span></div>
+        </div>
+        <p class="note" id="shape-note" hidden>Wider than 2.5:1 — the edges will be cropped (no outpainting yet).</p>
+      </div>
+
+      <div class="field">
+        <span class="label">Variations</span>
+        <div class="seg" id="count"></div>
+      </div>
+
+      <details class="advanced">
+        <summary>Advanced</summary>
+        <label class="field">
+          <span class="label">Seed <em>empty = random</em></span>
+          <div class="row">
+            <input id="seed" type="number" min="0" max="4294967295" placeholder="random">
+            <button type="button" class="ghost small" id="seed-clear">Clear</button>
+          </div>
+        </label>
+        <label class="field">
+          <span class="label">Steps <output id="steps-out">28</output></span>
+          <input id="steps" type="range" min="1" max="60" value="28">
+        </label>
+        <label class="field">
+          <span class="label">Guidance <output id="guidance-out">3.5</output></span>
+          <input id="guidance" type="range" min="0" max="10" step="0.1" value="3.5">
+        </label>
+        <button type="button" class="ghost small" id="reset-adv">Reset to defaults</button>
+      </details>
+
+      <button class="primary" type="submit" id="submit">Generate <kbd>⌘↵</kbd></button>
+      <p class="error" id="form-error" hidden></p>
+    </form>
+
+    <section class="gallery-wrap">
+      <div class="gallery-head">
+        <h2>Your images</h2>
+        <span class="muted" id="gallery-count"></span>
+      </div>
+      <div class="gallery" id="gallery"></div>
+      <p class="empty muted" id="empty" hidden>Nothing yet. Write a prompt and press Generate — the first image takes a few minutes while a GPU worker starts.</p>
+      <button class="ghost more" id="more" type="button" hidden>Load more</button>
+    </section>
+  </main>
+
+  <dialog class="lightbox" id="lightbox">
+    <div class="lb-img"><img id="lb-img" alt=""></div>
+    <aside class="lb-side">
+      <p class="lb-prompt" id="lb-prompt"></p>
+      <dl class="meta" id="lb-meta"></dl>
+      <div class="lb-actions">
+        <a class="primary as-btn" id="lb-download" href="#">Download PNG</a>
+        <button type="button" class="ghost" id="lb-reuse">Reuse settings</button>
+        <button type="button" class="ghost" id="lb-variation">New variation</button>
+        <button type="button" class="ghost danger" id="lb-delete">Delete</button>
+      </div>
+    </aside>
+    <button class="lb-close" id="lb-close" type="button" aria-label="Close">✕</button>
+    <button class="lb-nav prev" id="lb-prev" type="button" aria-label="Previous">‹</button>
+    <button class="lb-nav next" id="lb-next" type="button" aria-label="Next">›</button>
+  </dialog>
+
+  <dialog class="logs" id="logs">
+    <div class="logs-head">
+      <strong id="logs-key">Worker log</strong>
+      <button type="button" class="ghost small" id="logs-close">Close</button>
+    </div>
+    <pre id="logs-text"></pre>
+  </dialog>
+
+  <div class="toast" id="toast" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>

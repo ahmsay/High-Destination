@@ -1,9 +1,13 @@
 [project]
 name = "high-destination"
-version = "0.1.0"
-description = "CLI for the High Destination wallpaper generator"
+version = "0.2.0"
+description = "CLI and web UI for the High Destination wallpaper generator"
 requires-python = ">=3.10"
 dependencies = ["boto3>=1.34"]
+
+[project.optional-dependencies]
+web = ["fastapi>=0.110", "uvicorn>=0.29"]
+test = ["pytest>=8", "httpx>=0.27", "moto[s3,sqs,autoscaling]>=5", "pillow>=10"]
 
 [project.scripts]
 hd = "hd.main:main"
@@ -14,3 +18,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = ["hd"]
+
+[tool.setuptools.package-data]
+hd = ["static/*"]

@@ -7,7 +7,7 @@ A personal, self-hosted image generator (mainly wallpapers) on AWS — a cheap,
 fully customizable alternative to Midjourney for a few images per month.
 Generation speed is not a concern; cost and control are.
 
-> Status: v0.1 — CDK stack, GPU worker and `hd` CLI written; not yet deployed/tested on AWS.
+> Status: v0.2 — CDK stack, GPU worker, `hd` CLI and a local web UI (`hd serve`).
 
 ## Quick start
 
@@ -30,6 +30,29 @@ hd gen "neon tokyo alley in rain" --ratio 9:16 --count 3
 hd gen "minimal desert dunes" --size 3440x1440 --seed 42
 hd presets | hd status | hd stop | hd logs | hd fetch <job_id>
 ```
+
+### Web UI (local)
+
+```bash
+pip install -e '../cli[web]'
+hd serve --open                          # http://localhost:8000, this machine only
+```
+
+A prompt box, a size picker with a live shape preview (preset, ratio or exact
+pixels), variations, seed/steps/guidance, a gallery of your images with a
+lightbox (download, reuse settings, new variation, delete), and a worker status
+bar with Logs and Stop. Jobs submitted from the CLI show up there too.
+
+The server binds to 127.0.0.1 and has no login (it acts with your AWS
+credentials). It is built to move to AWS later unchanged: a static page plus a
+JSON API (`cli/hd/web.py`, docs at `/api/docs`) that keeps no state of its own
+and hands images to the browser as presigned S3 URLs. Login is a pluggable
+mode in `cli/hd/auth.py` (`none` today, Cognito next).
+
+**After upgrading to v0.2, redeploy once** (`npx aws-cdk deploy`) so the worker
+writes results per user (`outputs/<user>/…`) and creates gallery thumbnails.
+Until then the UI and CLI still find results from the old worker; older images
+stay where they are and are listed too.
 
 The **first** job takes longest (~10–15 min): the worker installs ComfyUI and
 downloads ~17 GB of weights from Hugging Face, then caches them in the S3
@@ -92,7 +115,8 @@ Models are listed in `worker/models.txt`. If a URL is gated on Hugging Face,
 store a token: `aws ssm put-parameter --name /high-destination/hf-token --type SecureString --value hf_...`
 
 Not built yet: outpainting for ratios beyond 2.5:1 (currently cropped),
-LLM prompt expansion, LoRAs, a baked AMI for faster cold starts, the web page.
+LLM prompt expansion, LoRAs, a baked AMI for faster cold starts, the cloud-hosted
+web UI (Cognito login, per-user limits).
 
 ---
 
