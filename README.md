@@ -64,8 +64,13 @@ Browser ─► CloudFront  https://highdestination.ahmetsay.com
 ```
 
 **DNS and certificate.** CloudFront needs its certificate in us-east-1, so if
-your stack is elsewhere a small `HighDestinationCert` stack is created there;
-deploy with `npx aws-cdk deploy --all`.
+your stack is elsewhere (e.g. eu-central-1) a small `HighDestinationCert` stack
+is created there. Bootstrap us-east-1 once as well, then deploy both stacks:
+
+```bash
+npx aws-cdk bootstrap aws://<account-id>/us-east-1
+npx aws-cdk deploy --all
+```
 
 - If `ahmetsay.com` is a Route 53 hosted zone in this account, add
   `-c hostedZone=ahmetsay.com` (or put it in `cdk.json`). Validation and the
