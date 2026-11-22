@@ -7,28 +7,53 @@ Resources:
   - Auto Scaling group, min 0 / max 1, Spot only, GPU instances running ComfyUI.
     The CLI raises desired capacity to 1 when it submits a job; the worker
     terminates itself (and decrements capacity) after being idle.
+  - Optional (context web=true): the web UI behind a Cognito login, see web.py.
 """
 from pathlib import Path
+from typing import Optional
 
 import aws_cdk as cdk
 from aws_cdk import (
     aws_autoscaling as autoscaling,
     aws_budgets as budgets,
+    aws_certificatemanager as acm,
     aws_ec2 as ec2,
     aws_iam as iam,
+    aws_route53 as route53,
     aws_s3 as s3,
     aws_s3_assets as s3_assets,
     aws_sqs as sqs,
 )
 from constructs import Construct
 
+from web import WebApp
+
 WORKER_DIR = Path(__file__).resolve().parent.parent / "worker"
 AMI_PARAM = "/aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-ubuntu-22.04/latest/ami-id"
 WORKER_TAG = ("hd:role", "worker")
 
 
+def zone_for(scope: Construct, name: Optional[str]) -> Optional[route53.IHostedZone]:
+    """The Route 53 hosted zone of your domain (context hostedZone), if it is in this account."""
+    return route53.HostedZone.from_lookup(scope, "Zone", domain_name=name) if name else None
+
+
+class CertStack(cdk.Stack):
+    """CloudFront only takes certificates from us-east-1, so the web domain's lives here."""
+
+    def __init__(self, scope: Construct, construct_id: str, *, domain: str, hosted_zone: Optional[str],
+                 **kwargs) -> None:
+        super().__init__(scope, construct_id, **kwargs)
+        # Without a hosted zone, ACM waits (and so does the deploy) until you add the
+        # validation CNAME it shows in the ACM console to your DNS.
+        self.certificate = acm.Certificate(self, "Cert", domain_name=domain,
+                                           validation=acm.CertificateValidation.from_dns(zone_for(self, hosted_zone)))
+
+
 class HighDestinationStack(cdk.Stack):
-    def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
+    def __init__(self, scope: Construct, construct_id: str, *, web: bool = False, domain: Optional[str] = None,
+                 hosted_zone: Optional[str] = None, certificate: Optional[acm.ICertificate] = None,
+                 **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         instance_types: list[str] = self.node.try_get_context("instanceTypes") or ["g6.xlarge"]
@@ -189,6 +214,25 @@ class HighDestinationStack(cdk.Stack):
                     )
                     for kind, threshold in (("ACTUAL", 80), ("FORECASTED", 100))
                 ],
+            )
+
+        # ---- Web UI (optional) ---------------------------------------------
+        if web:
+            zone = zone_for(self, hosted_zone) if domain else None
+            if domain and certificate is None:  # this stack is in us-east-1 itself
+                certificate = acm.Certificate(self, "WebCert", domain_name=domain,
+                                              validation=acm.CertificateValidation.from_dns(zone))
+            WebApp(
+                self,
+                "Web",
+                bucket=bucket,
+                queue=queue,
+                asg=asg,
+                worker_tag=WORKER_TAG,
+                domain=domain,
+                certificate=certificate,
+                zone=zone,
+                auth_domain_prefix=self.node.try_get_context("authDomainPrefix"),
             )
 
         # ---- Outputs (read by the CLI) ------------------------------------

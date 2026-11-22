@@ -2,7 +2,7 @@
 
 Run locally with `hd serve`. The app keeps no state of its own (everything is
 in S3, SQS and the Auto Scaling group) and images reach the browser as
-presigned S3 URLs, so the same app can later run on Lambda.
+presigned S3 URLs, so the same app runs on Lambda too (see hd/lambda_handler.py).
 """
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
@@ -68,9 +69,9 @@ def job_view(stack: core.Stack, st: dict) -> dict:
     return view
 
 
-def create_app(stack: core.Stack, auth_mode: str = "none") -> FastAPI:
+def create_app(stack: core.Stack, auth_mode: str = "none", client_id: Optional[str] = None) -> FastAPI:
     app = FastAPI(title="High Destination", docs_url="/api/docs", openapi_url="/api/openapi.json")
-    current_user = resolver(auth_mode)
+    current_user = resolver(auth_mode, client_id)
     app.state.current_user = current_user  # tests and future auth modes override this dependency
     admin = require_admin(current_user)
 
@@ -144,6 +145,12 @@ def create_app(stack: core.Stack, auth_mode: str = "none") -> FastAPI:
     def worker_logs(lines: int = Query(200, ge=1, le=5000), _: User = Depends(admin)):
         log = stack.latest_log(lines)
         return {"key": log[0], "text": log[1]} if log else {"key": None, "text": ""}
+
+    # Login settings for the page. Locally there is no login; in the cloud CDK writes
+    # its own config.js next to the page, and this route is never reached.
+    @app.get("/config.js", include_in_schema=False)
+    def config_js():
+        return Response("window.HD_AUTH = null;\n", media_type="text/javascript")
 
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
     return app

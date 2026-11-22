@@ -7,7 +7,8 @@ A personal, self-hosted image generator (mainly wallpapers) on AWS — a cheap,
 fully customizable alternative to Midjourney for a few images per month.
 Generation speed is not a concern; cost and control are.
 
-> Status: v0.2 — CDK stack, GPU worker, `hd` CLI and a local web UI (`hd serve`).
+> Status: v0.3 — CDK stack, GPU worker, `hd` CLI, and a web UI that runs locally
+> (`hd serve`) or on AWS behind a Cognito login (https://highdestination.ahmetsay.com).
 
 ## Quick start
 
@@ -19,7 +20,7 @@ or 8 to allow g6.2xlarge) in your region.
 # 1. Deploy (once per account/region: npx aws-cdk bootstrap)
 cd infra
 python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
-npx aws-cdk deploy                       # optional: -c budgetEmail=you@example.com
+npx aws-cdk deploy --all                 # optional: -c budgetEmail=you@example.com
 
 # 2. Install the CLI
 pip install -e ../cli
@@ -44,10 +45,63 @@ lightbox (download, reuse settings, new variation, delete), and a worker status
 bar with Logs and Stop. Jobs submitted from the CLI show up there too.
 
 The server binds to 127.0.0.1 and has no login (it acts with your AWS
-credentials). It is built to move to AWS later unchanged: a static page plus a
-JSON API (`cli/hd/web.py`, docs at `/api/docs`) that keeps no state of its own
-and hands images to the browser as presigned S3 URLs. Login is a pluggable
-mode in `cli/hd/auth.py` (`none` today, Cognito next).
+credentials). It is a static page plus a JSON API (`cli/hd/web.py`, docs at
+`/api/docs`) that keeps no state of its own and hands images to the browser as
+presigned S3 URLs, so the same code runs on AWS (below).
+
+### Web UI (on AWS, for you only)
+
+Deployed by the same `npx aws-cdk deploy` when `web` is `true` in
+`infra/cdk.json` (it is). The address is `webDomain` there
+(`highdestination.ahmetsay.com`); set it to `""` to use the `*.cloudfront.net`
+address instead.
+
+```
+Browser ─► CloudFront  https://highdestination.ahmetsay.com
+            ├─ /*      private S3 bucket: cli/hd/static + generated config.js
+            └─ /api/*  API Gateway HTTP API ─ JWT authorizer (Cognito) ─► Lambda: the same FastAPI app
+           Cognito: hosted login page, no self sign-up, TOTP MFA required
+```
+
+**DNS and certificate.** CloudFront needs its certificate in us-east-1, so if
+your stack is elsewhere (e.g. eu-central-1) a small `HighDestinationCert` stack
+is created there. Bootstrap us-east-1 once as well, then deploy both stacks:
+
+```bash
+npx aws-cdk bootstrap aws://<account-id>/us-east-1
+npx aws-cdk deploy --all
+```
+
+- If `ahmetsay.com` is a Route 53 hosted zone in this account, add
+  `-c hostedZone=ahmetsay.com` (or put it in `cdk.json`). Validation and the
+  DNS record are then automatic.
+- Otherwise (DNS at your registrar or elsewhere), two manual records:
+  1. While the deploy waits at the certificate, open ACM in us-east-1, copy
+     the validation CNAME (name and value) and add it to your DNS. The deploy
+     continues once ACM sees it (usually a few minutes).
+  2. After the deploy, add a CNAME `highdestination` → the `DnsCname` stack
+     output (`dxxxx.cloudfront.net`).
+
+**Create your login** (once; the invitation email has a temporary password):
+
+```bash
+POOL=$(aws cloudformation describe-stacks --stack-name HighDestination --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" --output text)
+aws cognito-idp admin-create-user --user-pool-id $POOL --username <you> --user-attributes Name=email,Value=<your email> Name=email_verified,Value=true
+aws cognito-idp admin-add-user-to-group --user-pool-id $POOL --username <you> --group-name admin
+```
+
+Open the site, sign in, choose a new password and scan the MFA QR code with an
+authenticator app. Members of the `admin` group get the worker controls and
+share `outputs/local/` with the CLI, so both show the same gallery. Anyone else
+you add gets a private folder (`outputs/<cognito sub>/`) and no worker controls.
+
+How it is protected: no sign-up, MFA, and every `/api` request needs a valid
+Cognito access token. API Gateway's JWT authorizer checks it, and the app
+checks the claims again (`cli/hd/auth.py`). The API is throttled to 10
+requests/s, and the page is served with a strict Content-Security-Policy.
+Sign-in lasts 30 days (refresh token in the browser's local storage).
+Expected cost: well under $1/month (Cognito Lite is free at this size;
+Lambda, API Gateway and CloudFront requests cost cents).
 
 **After upgrading to v0.2, redeploy once** (`npx aws-cdk deploy`) so the worker
 writes results per user (`outputs/<user>/…`) and creates gallery thumbnails.
@@ -115,8 +169,8 @@ Models are listed in `worker/models.txt`. If a URL is gated on Hugging Face,
 store a token: `aws ssm put-parameter --name /high-destination/hf-token --type SecureString --value hf_...`
 
 Not built yet: outpainting for ratios beyond 2.5:1 (currently cropped),
-LLM prompt expansion, LoRAs, a baked AMI for faster cold starts, the cloud-hosted
-web UI (Cognito login, per-user limits).
+LLM prompt expansion, LoRAs, a baked AMI for faster cold starts, per-user
+limits for users other than you.
 
 ---
 
