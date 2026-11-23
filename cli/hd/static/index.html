@@ -22,7 +22,29 @@
     <button class="ghost small" id="logout-btn" type="button" hidden>Log out</button>
   </header>
 
-  <main class="layout">
+  <section class="home" id="home" hidden>
+    <div class="home-hero">
+      <svg class="home-art" viewBox="0 0 320 140" aria-hidden="true">
+        <circle cx="236" cy="40" r="18" class="sun"/>
+        <path d="M0 140 L70 62 L118 104 L160 58 L212 112 L248 84 L320 140 Z" class="far"/>
+        <path d="M0 140 L40 108 L96 128 L150 92 L206 130 L262 104 L320 140 Z" class="near"/>
+      </svg>
+      <h1>High Destination</h1>
+      <p class="home-tag">Life is about the journey, but an image is about the result.</p>
+      <p class="home-lead">Your private wallpaper generator: write a prompt, pick an exact size, and a GPU
+        that starts only when you need it paints it for you.</p>
+      <button class="primary home-cta" id="signin-btn" type="button">Sign in</button>
+      <p class="error" id="home-error" hidden></p>
+    </div>
+    <ul class="home-features">
+      <li><strong>Any shape</strong><span>Ultrawide, phone, dual-monitor, or exact pixels with a live preview.</span></li>
+      <li><strong>Variations</strong><span>Several takes at once, then reuse the seed and settings you like.</span></li>
+      <li><strong>Your gallery</strong><span>Every image kept in your own storage, ready to download.</span></li>
+    </ul>
+    <p class="home-foot muted">Private by invitation. Sign-in uses a one-time code from your authenticator app.</p>
+  </section>
+
+  <main class="layout" id="app" hidden>
     <form class="panel" id="gen-form" autocomplete="off">
       <label class="field">
         <span class="label">Prompt</span>

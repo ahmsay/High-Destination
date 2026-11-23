@@ -49,23 +49,24 @@ const HDAuth = (() => {
     write(localStorage, KEY, tokens);
   }
 
-  // Call once at startup: finishes a login redirect, or starts one if there is no session.
+  // Call once at startup: finishes a login redirect if there is one. Resolves to true when there
+  // is a session (or no login is needed), false when the user still has to sign in. It never
+  // leaves the page by itself: the home page shows a Sign in button that calls login().
   async function ready() {
-    if (!cfg) return;
+    if (!cfg) return true;
     const q = new URLSearchParams(location.search);
     if (q.has("code") || q.has("error")) {
       const pending = read(sessionStorage, PENDING);
       write(sessionStorage, PENDING, null);
       history.replaceState(null, "", location.pathname); // drop ?code=… from the address bar
       if (q.has("error")) throw new Error(q.get("error_description") || q.get("error"));
-      if (!pending || pending.state !== q.get("state")) return login(); // stale or forged redirect
+      if (!pending || pending.state !== q.get("state")) return !!tokens; // stale or forged redirect
       await tokenRequest({
         grant_type: "authorization_code", code: q.get("code"),
         redirect_uri: cfg.redirectUri, code_verifier: pending.verifier,
       });
-      return;
     }
-    if (!tokens) return login();
+    return !!tokens;
   }
 
   async function header() {
@@ -96,5 +97,5 @@ const HDAuth = (() => {
     location.assign(`https://${cfg.domain}/logout?${q}`);
   }
 
-  return { enabled: !!cfg, ready, header, expired, logout };
+  return { enabled: !!cfg, ready, login, header, expired, logout };
 })();

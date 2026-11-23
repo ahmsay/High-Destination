@@ -298,7 +298,9 @@ def test_groups_claim_formats(raw, expected):
 def test_local_config_js_means_no_login(client):
     r = client.get("/config.js")
     assert r.status_code == 200 and "HD_AUTH = null" in r.text
-    assert 'src="config.js"' in client.get("/").text
+    page = client.get("/").text
+    assert 'src="config.js"' in page
+    assert 'id="signin-btn"' in page  # cloud: a home page with a Sign in button, not an instant redirect
 
 
 def test_stack_from_env(monkeypatch):
