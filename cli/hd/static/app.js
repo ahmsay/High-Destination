@@ -547,15 +547,35 @@ function wire() {
   $("logs-close").onclick = () => $("logs").close();
 }
 
+// Cloud only, before signing in: a home page with a Sign in button instead of an instant redirect.
+function showHome(error) {
+  $("home").hidden = false;
+  $("signin-btn").onclick = () => {
+    $("signin-btn").disabled = true;
+    HDAuth.login();
+  };
+  if (error) {
+    $("home-error").textContent = `Sign-in failed: ${error}`;
+    $("home-error").hidden = false;
+  }
+}
+
 async function init() {
+  let signedIn;
   try {
-    await HDAuth.ready();
+    signedIn = await HDAuth.ready();
+  } catch (ex) {
+    return showHome(ex.message);
+  }
+  if (!signedIn) return showHome();
+  try {
     [state.me, state.config] = await Promise.all([api("/me"), api("/presets")]);
   } catch (ex) {
     const p = Object.assign(document.createElement("p"), { className: "fatal", textContent: `Cannot reach the API: ${ex.message}` });
     document.body.replaceChildren(p);
     return;
   }
+  $("app").hidden = false;
   $("logout-btn").hidden = !HDAuth.enabled;
   $("logout-btn").onclick = () => HDAuth.logout();
   $("preset").replaceChildren(...state.config.presets.map((p) => {

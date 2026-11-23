@@ -235,3 +235,26 @@ dialog::backdrop { background: rgb(5 6 8 / 92%); }
   background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 9px; box-shadow: var(--shadow);
   font-size: 14px; max-width: calc(100vw - 32px);
 }
+
+/* ---- home: shown in the cloud before you sign in ---- */
+.home { max-width: 880px; margin: 0 auto; padding: 56px 16px 40px; display: flex; flex-direction: column; gap: 40px; }
+.home-hero { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 14px; }
+.home-art { width: min(100%, 360px); height: auto; margin-bottom: 8px; }
+.home-art .sun { fill: var(--accent); }
+.home-art .far { fill: color-mix(in srgb, var(--accent) 45%, var(--panel-2)); }
+.home-art .near { fill: var(--text); opacity: .85; }
+.home h1 { margin: 0; font-size: clamp(30px, 6vw, 44px); letter-spacing: -.5px; line-height: 1.1; }
+.home-tag { margin: 0; color: var(--muted); font-style: italic; }
+.home-lead { margin: 4px 0 6px; max-width: 520px; font-size: 16.5px; }
+.home-cta { min-width: 180px; font-size: 16px; padding: 12px 22px; }
+.home-features {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px;
+}
+.home-features li {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 16px 18px; display: flex; flex-direction: column; gap: 4px;
+}
+.home-features span { color: var(--muted); font-size: 14px; }
+.home-foot { margin: 0; text-align: center; font-size: 13px; }
+@media (max-width: 520px) { .home { padding-top: 32px; gap: 28px; } }
