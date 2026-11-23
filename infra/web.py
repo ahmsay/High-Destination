@@ -4,7 +4,8 @@
     /*      -> private S3 site bucket: cli/hd/static + a generated config.js
     /api/*  -> API Gateway HTTP API (JWT authorizer: Cognito access token)
                  -> Lambda running the same FastAPI app as `hd serve` (via Mangum)
-  Cognito user pool: no self sign-up, TOTP MFA required, hosted login page.
+  Cognito user pool: no self sign-up, TOTP MFA required, managed login page
+  branded to match the app (login_branding.py).
   Members of the "admin" group are the owner: they see the worker controls and
   share outputs/local/ with the CLI.
 """
@@ -37,6 +38,8 @@ from aws_cdk import (
     aws_sqs as sqs,
 )
 from constructs import Construct
+
+from login_branding import settings as login_branding_settings
 
 CLI_DIR = Path(__file__).resolve().parent.parent / "cli"
 STATIC_DIR = CLI_DIR / "hd" / "static"
@@ -97,7 +100,7 @@ class WebApp(Construct):
             mfa_second_factor=cognito.MfaSecondFactor(sms=False, otp=True),
             password_policy=cognito.PasswordPolicy(min_length=12),
             account_recovery=cognito.AccountRecovery.EMAIL_ONLY,
-            feature_plan=cognito.FeaturePlan.LITE,
+            feature_plan=cognito.FeaturePlan.ESSENTIALS,  # managed login + branding
             user_invitation=cognito.UserInvitationConfig(
                 email_subject="Your High Destination login",
                 email_body="Your username is {username} and your temporary password is {####}",
@@ -107,7 +110,8 @@ class WebApp(Construct):
         cognito.CfnUserPoolGroup(self, "AdminGroup", user_pool_id=pool.user_pool_id, group_name=ADMIN_GROUP,
                                  description="Owner: worker controls, shares outputs/local/ with the CLI")
         prefix = auth_domain_prefix or f"highdestination-{stack.account}"
-        pool.add_domain("LoginDomain", cognito_domain=cognito.CognitoDomainOptions(domain_prefix=prefix))
+        pool.add_domain("LoginDomain", cognito_domain=cognito.CognitoDomainOptions(domain_prefix=prefix),
+                        managed_login_version=cognito.ManagedLoginVersion.NEWER_MANAGED_LOGIN)
         login_domain = f"{prefix}.auth.{stack.region}.amazoncognito.com"
 
         # ---- API -----------------------------------------------------------
@@ -252,6 +256,10 @@ class WebApp(Construct):
             id_token_validity=cdk.Duration.hours(1),
             refresh_token_validity=cdk.Duration.days(30),
         )
+        # Managed login has no default style: without one the page shows an error.
+        cognito.CfnManagedLoginBranding(self, "LoginBranding", user_pool_id=pool.user_pool_id,
+                                        client_id=client.user_pool_client_id,
+                                        settings=login_branding_settings())
         fn.add_environment("HD_CLIENT_ID", client.user_pool_client_id)
         http_api.add_routes(
             path="/api/{proxy+}",

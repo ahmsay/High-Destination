@@ -60,7 +60,7 @@ address instead.
 Browser ─► CloudFront  https://highdestination.ahmetsay.com
             ├─ /*      private S3 bucket: cli/hd/static + generated config.js
             └─ /api/*  API Gateway HTTP API ─ JWT authorizer (Cognito) ─► Lambda: the same FastAPI app
-           Cognito: hosted login page, no self sign-up, TOTP MFA required
+           Cognito: managed login page (app-styled, dark), no self sign-up, TOTP MFA required
 ```
 
 **DNS and certificate.** CloudFront needs its certificate in us-east-1, so if
@@ -100,7 +100,7 @@ Cognito access token. API Gateway's JWT authorizer checks it, and the app
 checks the claims again (`cli/hd/auth.py`). The API is throttled to 10
 requests/s, and the page is served with a strict Content-Security-Policy.
 Sign-in lasts 30 days (refresh token in the browser's local storage).
-Expected cost: well under $1/month (Cognito Lite is free at this size;
+Expected cost: well under $1/month (Cognito Essentials is free up to 10,000 monthly users;
 Lambda, API Gateway and CloudFront requests cost cents).
 
 **After upgrading to v0.2, redeploy once** (`npx aws-cdk deploy`) so the worker
