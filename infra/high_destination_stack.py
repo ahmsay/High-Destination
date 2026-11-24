@@ -4,9 +4,11 @@ Resources:
   - S3 bucket: model weights (models/), results (outputs/), worker logs (logs/)
   - SQS queue (+ DLQ): generation jobs
   - VPC with public subnets only (no NAT gateway) + free S3 gateway endpoint
-  - Auto Scaling group, min 0 / max 1, Spot only, GPU instances running ComfyUI.
+  - Auto Scaling group, min 0 / max 1, Spot, GPU instances running ComfyUI.
     The CLI raises desired capacity to 1 when it submits a job; the worker
     terminates itself (and decrements capacity) after being idle.
+  - Optional (context onDemandFallbackMinutes > 0): a Lambda that switches the
+    group to On-Demand while Spot launches keep failing, see fallback/index.py.
   - Optional (context web=true): the web UI behind a Cognito login, see web.py.
 """
 from pathlib import Path
@@ -18,7 +20,11 @@ from aws_cdk import (
     aws_budgets as budgets,
     aws_certificatemanager as acm,
     aws_ec2 as ec2,
+    aws_events as events,
+    aws_events_targets as targets,
     aws_iam as iam,
+    aws_lambda as lambda_,
+    aws_logs as logs,
     aws_route53 as route53,
     aws_s3 as s3,
     aws_s3_assets as s3_assets,
@@ -29,6 +35,7 @@ from constructs import Construct
 from web import WebApp
 
 WORKER_DIR = Path(__file__).resolve().parent.parent / "worker"
+FALLBACK_DIR = Path(__file__).resolve().parent / "fallback"
 AMI_PARAM = "/aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-ubuntu-22.04/latest/ami-id"
 WORKER_TAG = ("hd:role", "worker")
 
@@ -60,6 +67,7 @@ class HighDestinationStack(cdk.Stack):
         idle_minutes = int(self.node.try_get_context("idleMinutes") or 10)
         comfyui_version = self.node.try_get_context("comfyuiVersion") or "master"
         budget_email = self.node.try_get_context("budgetEmail")
+        fallback_minutes = int(self.node.try_get_context("onDemandFallbackMinutes") or 0)
 
         # ---- Storage -------------------------------------------------------
         bucket = s3.Bucket(
@@ -186,11 +194,54 @@ class HighDestinationStack(cdk.Stack):
                     on_demand_base_capacity=0,
                     on_demand_percentage_above_base_capacity=0,
                     spot_allocation_strategy=autoscaling.SpotAllocationStrategy.PRICE_CAPACITY_OPTIMIZED,
+                    # Only used by the On-Demand fallback: the cheapest type that has capacity.
+                    on_demand_allocation_strategy=autoscaling.OnDemandAllocationStrategy.LOWEST_PRICE,
                 ),
             ),
         )
         cdk.Tags.of(asg).add(*WORKER_TAG)
         cdk.Tags.of(asg).add("Name", "high-destination-worker")
+
+        # ---- Optional On-Demand fallback ----------------------------------
+        if fallback_minutes > 0:
+            fallback = lambda_.Function(
+                self,
+                "SpotFallback",
+                description="High Destination: switch the worker to On-Demand while Spot is unavailable",
+                runtime=lambda_.Runtime.PYTHON_3_12,
+                architecture=lambda_.Architecture.ARM_64,
+                handler="index.handler",
+                code=lambda_.Code.from_asset(str(FALLBACK_DIR)),
+                timeout=cdk.Duration.seconds(30),
+                environment={"HD_ASG": asg.auto_scaling_group_name, "HD_FALLBACK_MINUTES": str(fallback_minutes)},
+                log_group=logs.LogGroup(self, "SpotFallbackLogs", retention=logs.RetentionDays.TWO_WEEKS,
+                                        removal_policy=cdk.RemovalPolicy.DESTROY),
+            )
+            fallback.add_to_role_policy(iam.PolicyStatement(
+                actions=["autoscaling:DescribeAutoScalingGroups", "autoscaling:DescribeScalingActivities"],
+                resources=["*"],
+            ))
+            fallback.add_to_role_policy(iam.PolicyStatement(
+                actions=["autoscaling:UpdateAutoScalingGroup"],
+                resources=["*"],
+                conditions={"StringEquals": {f"autoscaling:ResourceTag/{WORKER_TAG[0]}": WORKER_TAG[1]}},
+            ))
+            # Updating a group that uses a launch template checks that the caller could launch it.
+            fallback.add_to_role_policy(iam.PolicyStatement(
+                actions=["ec2:RunInstances", "ec2:CreateTags", "ec2:DescribeLaunchTemplateVersions"],
+                resources=["*"],
+            ))
+            role.grant_pass_role(fallback)
+            events.Rule(
+                self,
+                "WorkerLaunchEvents",
+                event_pattern=events.EventPattern(
+                    source=["aws.autoscaling"],
+                    detail_type=["EC2 Instance Launch Unsuccessful", "EC2 Instance Terminate Successful"],
+                    detail={"AutoScalingGroupName": [asg.auto_scaling_group_name]},
+                ),
+                targets=[targets.LambdaFunction(fallback, retry_attempts=2)],
+            )
 
         # ---- Optional budget alarm ----------------------------------------
         if budget_email:

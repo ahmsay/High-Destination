@@ -14,7 +14,8 @@ Generation speed is not a concern; cost and control are.
 
 Prerequisites: AWS credentials, Python 3.10+, Node.js (for the CDK CLI), and a
 **G-instance Spot quota** ("All G and VT Spot Instance Requests" ≥ 4 vCPUs,
-or 8 to allow the 2xlarge sizes) in your region.
+or 8 to allow the 2xlarge sizes) in your region. For the
+On-Demand fallback, also "Running On-Demand G and VT instances" (same sizes).
 
 ```bash
 # 1. Deploy (once per account/region: npx aws-cdk bootstrap)
@@ -161,6 +162,13 @@ flowchart TB
   capacity, weighing price. If no worker appears, `aws autoscaling
   describe-scaling-activities` shows why (`UnfulfillableCapacity` = no Spot
   capacity for any of them right now; it keeps retrying).
+- **On-Demand fallback:** if launches keep failing for 20 minutes
+  (`onDemandFallbackMinutes` in `infra/cdk.json`, 0 turns it off), a small
+  Lambda (`infra/fallback/index.py`) switches the group to On-Demand, cheapest
+  available type first (~$0.65–1/hr in eu-central-1), and alternates with Spot
+  on each further failure. When the worker terminates, it is back to Spot. Needs
+  the "Running On-Demand G and VT instances" quota (≥ 4 vCPUs, or 8); with 0 it
+  just keeps retrying Spot. Its decisions are in the Lambda's CloudWatch log.
 - The instance (Deep Learning Base AMI, Ubuntu 22.04) runs `worker/bootstrap.sh`:
   ComfyUI (pinned version in `infra/cdk.json`) on the NVMe instance store,
   weights from `s3://<bucket>/models/`, then `worker/worker.py` pulls jobs.
