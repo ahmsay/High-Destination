@@ -166,6 +166,8 @@ class HighDestinationStack(cdk.Stack):
             ],
         )
 
+        # Spot comes from instances_distribution below, not from the launch template,
+        # so the console's "Request Spot Instances: No" (a launch template field) is expected.
         asg = autoscaling.AutoScalingGroup(
             self,
             "WorkerAsg",

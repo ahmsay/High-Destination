@@ -14,7 +14,7 @@ Generation speed is not a concern; cost and control are.
 
 Prerequisites: AWS credentials, Python 3.10+, Node.js (for the CDK CLI), and a
 **G-instance Spot quota** ("All G and VT Spot Instance Requests" ≥ 4 vCPUs,
-or 8 to allow g6.2xlarge) in your region.
+or 8 to allow the 2xlarge sizes) in your region.
 
 ```bash
 # 1. Deploy (once per account/region: npx aws-cdk bootstrap)
@@ -122,7 +122,7 @@ flowchart TB
     subgraph AWS["AWS: HighDestination stack"]
         direction TB
         SQS[["SQS queue: jobs<br/>+ dead-letter queue"]]
-        ASG["Auto Scaling group<br/>min 0 · max 1 · Spot only<br/>g6.xlarge · g6.2xlarge · g5.xlarge"]
+        ASG["Auto Scaling group<br/>min 0 · max 1 · Spot only<br/>g6 · g5 · g6e · g4dn (xlarge, 2xlarge)"]
         S3[("S3 bucket<br/>models/ · outputs/ · logs/")]
         SSM[("SSM Parameter Store<br/>HF token (optional)")]
 
@@ -153,8 +153,14 @@ flowchart TB
 
 ### How it runs
 
-- `hd gen` puts a job on SQS and sets the Auto Scaling group to 1 (Spot only:
-  g6.xlarge → g6.2xlarge → g5.xlarge, price-capacity-optimized, 2–3 AZs).
+- `hd gen` puts a job on SQS and sets the Auto Scaling group to 1 (Spot only,
+  price-capacity-optimized across 3 AZs). Eight instance types (`instanceTypes`
+  in `infra/cdk.json`) so a Spot shortage of one GPU doesn't block the worker:
+  g6 (L4), g5 (A10G), g6e (L40S) and g4dn (T4, slower), each in xlarge and
+  2xlarge, all within an 8-vCPU Spot quota. The ASG takes whichever has
+  capacity, weighing price. If no worker appears, `aws autoscaling
+  describe-scaling-activities` shows why (`UnfulfillableCapacity` = no Spot
+  capacity for any of them right now; it keeps retrying).
 - The instance (Deep Learning Base AMI, Ubuntu 22.04) runs `worker/bootstrap.sh`:
   ComfyUI (pinned version in `infra/cdk.json`) on the NVMe instance store,
   weights from `s3://<bucket>/models/`, then `worker/worker.py` pulls jobs.

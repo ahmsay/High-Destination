@@ -32,7 +32,7 @@ finish() {
 trap 'finish $?' EXIT
 
 # ---- Fast local disk ---------------------------------------------------------
-# g6/g5 come with an NVMe instance store; use it for ComfyUI + weights.
+# g4dn/g5/g6/g6e come with an NVMe instance store; use it for ComfyUI + weights.
 WORK=/opt/hd/work
 if mountpoint -q /opt/dlami/nvme; then
   WORK=/opt/dlami/nvme/hd
@@ -46,7 +46,7 @@ else
 fi
 mkdir -p "$WORK"
 
-# Swap: g6.xlarge has 16 GB RAM, and loading FLUX can spike above that.
+# Swap: the xlarge sizes have 16 GB RAM (g6e.xlarge: 32), and loading FLUX can spike above that.
 if [ "$(free -g | awk '/Mem:/ {print $2}')" -lt 30 ] && ! swapon --show | grep -q .; then
   fallocate -l 16G "$WORK/swapfile" && chmod 600 "$WORK/swapfile"
   mkswap "$WORK/swapfile" && swapon "$WORK/swapfile"
