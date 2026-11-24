@@ -6,6 +6,7 @@
       "g6e.xlarge", "g6e.2xlarge", "g4dn.xlarge", "g4dn.2xlarge"
     ],
     "idleMinutes": 10,
+    "onDemandFallbackMinutes": 20,
     "comfyuiVersion": "v0.45.4",
     "web": true,
     "webDomain": "highdestination.ahmetsay.com"
