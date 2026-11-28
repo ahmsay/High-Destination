@@ -4,8 +4,8 @@
     /*      -> private S3 site bucket: cli/hd/static + a generated config.js
     /api/*  -> API Gateway HTTP API (JWT authorizer: Cognito access token)
                  -> Lambda running the same FastAPI app as `hd serve` (via Mangum)
-  Cognito user pool: no self sign-up, TOTP MFA required, managed login page
-  branded to match the app (login_branding.py).
+  Cognito user pool: sign in with email + password (no usernames), no self
+  sign-up, TOTP MFA required, managed login page branded to match the app (login_branding.py).
   Members of the "admin" group are the owner: they see the worker controls and
   share outputs/local/ with the CLI.
 """
@@ -91,7 +91,8 @@ class WebApp(Construct):
             self,
             "Users",
             self_sign_up_enabled=False,  # the only accounts are the ones you create
-            sign_in_aliases=cognito.SignInAliases(username=True, email=True),
+            # Email is the username: you sign in with email + password. Changing this replaces the pool.
+            sign_in_aliases=cognito.SignInAliases(username=False, email=True),
             auto_verify=cognito.AutoVerifiedAttrs(email=True),
             standard_attributes=cognito.StandardAttributes(
                 email=cognito.StandardAttribute(required=True, mutable=True)
@@ -103,13 +104,15 @@ class WebApp(Construct):
             feature_plan=cognito.FeaturePlan.ESSENTIALS,  # managed login + branding
             user_invitation=cognito.UserInvitationConfig(
                 email_subject="Your High Destination login",
-                email_body="Your username is {username} and your temporary password is {####}",
+                email_body="Sign in with your email address ({username}) and the temporary password {####}",
             ),
             removal_policy=cdk.RemovalPolicy.DESTROY,  # holds nothing but your login
         )
         cognito.CfnUserPoolGroup(self, "AdminGroup", user_pool_id=pool.user_pool_id, group_name=ADMIN_GROUP,
                                  description="Owner: worker controls, shares outputs/local/ with the CLI")
-        prefix = auth_domain_prefix or f"highdestination-{stack.account}"
+        # Must differ from the old (username) pool's prefix: CloudFormation creates the
+        # replacement domain before it deletes the old one, and prefixes are unique.
+        prefix = auth_domain_prefix or f"highdestination-login-{stack.account}"
         pool.add_domain("LoginDomain", cognito_domain=cognito.CognitoDomainOptions(domain_prefix=prefix),
                         managed_login_version=cognito.ManagedLoginVersion.NEWER_MANAGED_LOGIN)
         login_domain = f"{prefix}.auth.{stack.region}.amazoncognito.com"

@@ -61,7 +61,7 @@ address instead.
 Browser ─► CloudFront  https://highdestination.ahmetsay.com
             ├─ /*      private S3 bucket: cli/hd/static + generated config.js
             └─ /api/*  API Gateway HTTP API ─ JWT authorizer (Cognito) ─► Lambda: the same FastAPI app
-           Cognito: managed login page (app-styled, dark), no self sign-up, TOTP MFA required
+           Cognito: managed login page (app-styled, dark), email + password, no self sign-up, TOTP MFA required
 ```
 
 **DNS and certificate.** CloudFront needs its certificate in us-east-1, so if
@@ -87,12 +87,19 @@ npx aws-cdk deploy --all
 
 ```bash
 POOL=$(aws cloudformation describe-stacks --stack-name HighDestination --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" --output text)
-aws cognito-idp admin-create-user --user-pool-id $POOL --username <you> --user-attributes Name=email,Value=<your email> Name=email_verified,Value=true
-aws cognito-idp admin-add-user-to-group --user-pool-id $POOL --username <you> --group-name admin
+aws cognito-idp admin-create-user --user-pool-id $POOL --username <your email> --user-attributes Name=email,Value=<your email> Name=email_verified,Value=true
+aws cognito-idp admin-add-user-to-group --user-pool-id $POOL --username <your email> --group-name admin
 ```
 
-Open the site, sign in, choose a new password and scan the MFA QR code with an
-authenticator app. Members of the `admin` group get the worker controls and
+> **Upgrading from username sign-in:** Cognito cannot switch an existing pool
+> to email sign-in, so the deploy replaces the user pool (new pool, new login
+> domain). Existing logins are deleted. Run the two commands above again to
+> recreate yours. Your images are not affected: the admin group still maps to
+> `outputs/local/`. Other users get a new `sub`, so their old
+> `outputs/<sub>/` folders stay in S3 but no longer show in their gallery.
+
+Open the site, sign in with your email address and the temporary password,
+choose a new password and scan the MFA QR code with an authenticator app. Members of the `admin` group get the worker controls and
 share `outputs/local/` with the CLI, so both show the same gallery. Anyone else
 you add gets a private folder (`outputs/<cognito sub>/`) and no worker controls.
 
