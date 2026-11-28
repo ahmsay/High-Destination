@@ -87,11 +87,12 @@ class WebApp(Construct):
         stack = cdk.Stack.of(self)
 
         # ---- Login ---------------------------------------------------------
-        # Construct IDs say "Email": Cognito cannot update sign-in settings in place, so moving
-        # from username to email sign-in needs new logical IDs (new pool, then the old is deleted).
+        # These construct IDs replaced "Users"/"AdminGroup"/"LoginBranding" when sign-in moved from
+        # username to email: Cognito cannot change sign-in settings in place, so the pool needed
+        # new logical IDs. Changing sign_in_aliases again needs new IDs again.
         pool = cognito.UserPool(
             self,
-            "EmailUsers",
+            "UserPool",
             self_sign_up_enabled=False,  # the only accounts are the ones you create
             # Email is the username: you sign in with email + password.
             sign_in_aliases=cognito.SignInAliases(username=False, email=True),
@@ -110,7 +111,7 @@ class WebApp(Construct):
             ),
             removal_policy=cdk.RemovalPolicy.DESTROY,  # holds nothing but your login
         )
-        cognito.CfnUserPoolGroup(self, "EmailAdminGroup", user_pool_id=pool.user_pool_id, group_name=ADMIN_GROUP,
+        cognito.CfnUserPoolGroup(self, "Admins", user_pool_id=pool.user_pool_id, group_name=ADMIN_GROUP,
                                  description="Owner: worker controls, shares outputs/local/ with the CLI")
         # Must differ from the old (username) pool's prefix: CloudFormation creates the
         # replacement domain before it deletes the old one, and prefixes are unique.
@@ -262,7 +263,7 @@ class WebApp(Construct):
             refresh_token_validity=cdk.Duration.days(30),
         )
         # Managed login has no default style: without one the page shows an error.
-        cognito.CfnManagedLoginBranding(self, "EmailLoginBranding", user_pool_id=pool.user_pool_id,
+        cognito.CfnManagedLoginBranding(self, "Branding", user_pool_id=pool.user_pool_id,
                                         client_id=client.user_pool_client_id,
                                         settings=login_branding_settings())
         fn.add_environment("HD_CLIENT_ID", client.user_pool_client_id)
